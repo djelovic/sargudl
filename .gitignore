@@ -1,0 +1,9 @@
+.DS_Store
+Sargudl.csproj.lscache
+.claude/
+.vscode/
+bin/
+obj/
+*.user
+*.suo
+*.cache

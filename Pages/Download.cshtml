@@ -1,0 +1,169 @@
+@page
+@model DownloadModel
+@{
+    Layout = null;
+    ViewData["Title"] = "Download Progress";
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>@ViewData["Title"]</title>
+    <style>
+        body { font-family: sans-serif; max-width: 720px; margin: 3em auto; padding: 0 1em; color: #222; }
+        h1 { margin-bottom: 0.2em; }
+        .row { margin: 0.4em 0; }
+        .label { display: inline-block; min-width: 120px; font-weight: bold; }
+        .mono { font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+        .barOuter { width: 100%; background: #eee; border: 1px solid #ccc; border-radius: 3px; overflow: hidden; height: 22px; margin: 1em 0; }
+        .barInner { width: 0%; background: #4caf50; height: 100%; transition: width 0.3s ease; }
+        .badge { display: inline-block; padding: 0.15em 0.6em; border-radius: 3px; color: #fff; background: #555; font-size: 0.9em; }
+        .badge.Downloading { background: #1976d2; }
+        .badge.Completed { background: #388e3c; }
+        .badge.Cancelled { background: #757575; }
+        .badge.Failed { background: #b00020; }
+        .badge.Queued { background: #fb8c00; }
+        .error { color: #b00020; }
+        button { padding: 0.5em 1em; cursor: pointer; }
+        a { color: #1976d2; }
+    </style>
+</head>
+<body>
+    <h1>Download</h1>
+
+    <div class="row"><span class="label">URL:</span> <span class="mono" id="url">@Model.DownloadUrl</span></div>
+    <div class="row"><span class="label">File:</span> <span class="mono" id="file">—</span></div>
+    <div class="row"><span class="label">Destination:</span> <span class="mono" id="dest">—</span></div>
+    <div class="row"><span class="label">Status:</span> <span id="status" class="badge">—</span></div>
+    <div class="row"><span class="label">Progress:</span> <span id="progress">—</span></div>
+
+    <div class="barOuter"><div id="bar" class="barInner"></div></div>
+
+    <p id="error" class="error"></p>
+
+    <button id="cancel" style="display:none;">Cancel</button>
+    <button id="enableNotifications" style="display:none;">Enable notifications</button>
+
+    <p style="margin-top: 2em;"><a href="/">← Start another download</a></p>
+
+    <script>
+        const url = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.DownloadUrl));
+
+        function formatBytes(b) {
+            if (b == null) return "?";
+            const units = ["B", "KB", "MB", "GB", "TB"];
+            let i = 0;
+            let n = Number(b);
+            while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+            return n.toFixed(2) + " " + units[i];
+        }
+
+        const statusEl = document.getElementById("status");
+        const fileEl = document.getElementById("file");
+        const destEl = document.getElementById("dest");
+        const progressEl = document.getElementById("progress");
+        const barEl = document.getElementById("bar");
+        const errorEl = document.getElementById("error");
+        const cancelEl = document.getElementById("cancel");
+        const notifyEl = document.getElementById("enableNotifications");
+
+        let timer = null;
+        let lastStatus = null;
+        let notified = false;
+
+        function notificationsSupported() {
+            return "Notification" in window;
+        }
+
+        function updateNotifyButton() {
+            if (!notificationsSupported()) {
+                notifyEl.style.display = "none";
+                return;
+            }
+            notifyEl.style.display =
+                Notification.permission === "default" ? "inline-block" : "none";
+        }
+
+        notifyEl.addEventListener("click", async () => {
+            if (!notificationsSupported()) return;
+            try {
+                await Notification.requestPermission();
+            } finally {
+                updateNotifyButton();
+            }
+        });
+
+        function notifyTerminal(job) {
+            if (notified) return;
+            if (!notificationsSupported() || Notification.permission !== "granted") return;
+            const label = job.fileName || job.url;
+            let title, body;
+            if (job.status === "Completed") {
+                title = "Download complete";
+                body = label;
+            } else if (job.status === "Failed") {
+                title = "Download failed";
+                body = (job.error ? job.error + "\n" : "") + label;
+            } else {
+                return;
+            }
+            notified = true;
+            const n = new Notification(title, { body, tag: job.url });
+            n.addEventListener("click", () => { window.focus(); n.close(); });
+        }
+
+        updateNotifyButton();
+
+        async function refresh() {
+            try {
+                const r = await fetch("/api/status?url=" + encodeURIComponent(url));
+                if (!r.ok) return;
+                const j = await r.json();
+
+                fileEl.textContent = j.fileName || "—";
+                destEl.textContent = j.destinationPath || "—";
+
+                statusEl.textContent = j.status;
+                statusEl.className = "badge " + j.status;
+
+                const downloaded = formatBytes(j.bytesDownloaded);
+                const total = formatBytes(j.totalBytes);
+                const pct = j.totalBytes ? (j.bytesDownloaded / j.totalBytes * 100) : 0;
+                progressEl.textContent = `${downloaded} / ${total} (${pct.toFixed(2)}%)`;
+                barEl.style.width = Math.min(100, pct) + "%";
+
+                errorEl.textContent = j.error || "";
+
+                const inProgress = j.status === "Downloading" || j.status === "Queued";
+                cancelEl.style.display = inProgress ? "inline-block" : "none";
+
+                if ((j.status === "Completed" || j.status === "Failed") && lastStatus !== j.status) {
+                    notifyTerminal(j);
+                }
+                lastStatus = j.status;
+                updateNotifyButton();
+
+                if (!inProgress && timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        cancelEl.addEventListener("click", async () => {
+            cancelEl.disabled = true;
+            try {
+                await fetch("/api/cancel?url=" + encodeURIComponent(url), { method: "POST" });
+            } finally {
+                cancelEl.disabled = false;
+            }
+            refresh();
+        });
+
+        refresh();
+        timer = setInterval(refresh, 1000);
+    </script>
+</body>
+</html>
