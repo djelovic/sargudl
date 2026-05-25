@@ -53,6 +53,13 @@ Jobs live in memory only; restarting the server forgets all state.
   (case-insensitive).
   - Match → `<TvShowsPath>/<name with '.'→' '>/Season <n>/<filename>`
   - No match → `<MoviesPath>/<filename>`
+- **Skip-if-already-downloaded**: before the retry loop, if the destination
+  file exists and no `.part` is present, a HEAD request is issued. If the
+  server returns success with a `Content-Length` matching the local file,
+  the job is marked `Completed` without re-downloading. Any HEAD failure
+  (network error, 4xx/5xx, no `Content-Length`, server doesn't support HEAD)
+  silently falls through to the normal GET, which will either succeed or
+  fail with its own error handling.
 - **Resume**: writes to `<finalPath>.part`. On retry it sends
   `Range: bytes=<existing-length>-`. If the server returns 200 instead of 206,
   the partial is overwritten via `FileMode.Create` and we restart from zero.
@@ -63,8 +70,8 @@ Jobs live in memory only; restarting the server forgets all state.
   `min(30s, 2^min(attempt,5)s)`, retry. Loop exits only on success, 4xx, or
   cancellation.
 - **Cancellation**: `job.Cts.Cancel()` propagates through `SendAsync`,
-  `ReadAsync`, and `Task.Delay`. The `.part` file is left in place so a fresh
-  `StartOrGet` resumes from where the user cancelled.
+  `ReadAsync`, and `Task.Delay`. The `.part` file is deleted in
+  `MarkCancelled`, so a subsequent Start for the same URL begins from zero.
 - **Completion**: any existing destination file is deleted, then the `.part`
   is renamed to the final path.
 
@@ -90,6 +97,7 @@ the framework's default antiforgery.
   worker writes to it. On 64-bit runtimes `long` reads/writes are atomic,
   which is good enough for a progress counter; don't add invariants that
   require two fields to be consistent without a lock.
-- `Url` is the job key. Two requests for the same URL share one job, which
-  is also how "resume after cancel" works — hitting Start again from the
-  home page re-enters `StartOrGet` and continues from the `.part` file.
+- `Url` is the job key. Two requests for the same URL share one job. The
+  `.part` file persists across transient retries (so the next attempt sends
+  a `Range` header), but is deleted on cancel — Cancel is a hard stop, not
+  a pause.

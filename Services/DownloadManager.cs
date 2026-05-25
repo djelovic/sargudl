@@ -29,7 +29,7 @@ public class DownloadManager
             existing.Cts.Dispose();
         }
 
-        var job = new DownloadJob { Url = url };
+        var job = new DownloadJob(url);
         _jobs[url] = job;
 
         _ = Task.Run(async () =>

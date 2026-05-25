@@ -57,6 +57,20 @@ public partial class DownloadWorker
         var partPath = job.DestinationPath + ".part";
         job.Status = DownloadStatus.Downloading;
 
+        if (File.Exists(job.DestinationPath) && !File.Exists(partPath))
+        {
+            try
+            {
+                if (await TrySkipIfMatchingAsync(uri, job))
+                    return;
+            }
+            catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
+            {
+                MarkCancelled(job, partPath);
+                return;
+            }
+        }
+
         var attempt = 0;
         while (!job.Cts.IsCancellationRequested)
         {
@@ -68,13 +82,7 @@ public partial class DownloadWorker
 
                 var client = _httpClientFactory.CreateClient("download");
                 using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-
-                var creds = GetBasicAuth(uri);
-                if (creds != null)
-                {
-                    var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{creds.Username}:{creds.Password}"));
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
-                }
+                AddAuth(request, uri);
 
                 if (startPosition > 0)
                     request.Headers.Range = new RangeHeaderValue(startPosition, null);
@@ -132,7 +140,7 @@ public partial class DownloadWorker
             }
             catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
             {
-                job.Status = DownloadStatus.Cancelled;
+                MarkCancelled(job, partPath);
                 return;
             }
             catch (Exception ex)
@@ -148,13 +156,80 @@ public partial class DownloadWorker
                 }
                 catch (OperationCanceledException)
                 {
-                    job.Status = DownloadStatus.Cancelled;
+                    MarkCancelled(job, partPath);
                     return;
                 }
             }
         }
 
+        MarkCancelled(job, partPath);
+    }
+
+    private async Task<bool> TrySkipIfMatchingAsync(Uri uri, DownloadJob job)
+    {
+        long localSize;
+        try
+        {
+            localSize = new FileInfo(job.DestinationPath).Length;
+        }
+        catch
+        {
+            return false;
+        }
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient("download");
+            using var request = new HttpRequestMessage(HttpMethod.Head, uri);
+            AddAuth(request, uri);
+
+            using var response = await client.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, job.Cts.Token);
+
+            if (!response.IsSuccessStatusCode) return false;
+            if (response.Content.Headers.ContentLength is not long remoteSize) return false;
+            if (remoteSize != localSize) return false;
+
+            job.BytesDownloaded = localSize;
+            job.TotalBytes = localSize;
+            job.Status = DownloadStatus.Completed;
+            _logger.LogInformation(
+                "Skipping download of {Url}; existing file matches remote size ({Size} bytes)",
+                job.Url, localSize);
+            return true;
+        }
+        catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "HEAD precheck for {Url} failed; will proceed with full download", job.Url);
+            return false;
+        }
+    }
+
+    private void AddAuth(HttpRequestMessage request, Uri uri)
+    {
+        var creds = GetBasicAuth(uri);
+        if (creds == null) return;
+        var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{creds.Username}:{creds.Password}"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
+    }
+
+    private void MarkCancelled(DownloadJob job, string partPath)
+    {
         job.Status = DownloadStatus.Cancelled;
+        try
+        {
+            if (File.Exists(partPath))
+                File.Delete(partPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete partial file {PartPath} after cancel", partPath);
+        }
     }
 
     private BasicAuthCredentials? GetBasicAuth(Uri uri)

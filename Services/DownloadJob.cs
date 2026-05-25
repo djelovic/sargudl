@@ -11,12 +11,14 @@ public enum DownloadStatus
 
 public class DownloadJob
 {
-    public string Url { get; init; } = "";
-    public string FileName { get; set; } = "";
-    public string DestinationPath { get; set; } = "";
-    public long BytesDownloaded { get; set; }
-    public long? TotalBytes { get; set; }
-    public DownloadStatus Status { get; set; } = DownloadStatus.Queued;
-    public string? Error { get; set; }
-    public CancellationTokenSource Cts { get; init; } = new();
+    public readonly string Url;
+    public string FileName = "";
+    public string DestinationPath = "";
+    public long BytesDownloaded;
+    public long? TotalBytes;
+    public DownloadStatus Status = DownloadStatus.Queued;
+    public string? Error;
+    public readonly CancellationTokenSource Cts = new();
+
+    public DownloadJob(string url) => Url = url;
 }
