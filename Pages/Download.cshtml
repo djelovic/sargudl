@@ -173,21 +173,8 @@
         pauseEl.addEventListener("click", () => action(pauseEl, "/api/pause"));
         resumeEl.addEventListener("click", () => action(resumeEl, "/api/resume"));
 
-        const autoStart = @(Model.AutoStart ? "true" : "false");
-
-        async function begin() {
-            if (autoStart) {
-                try {
-                    await fetch("/api/start?url=" + encodeURIComponent(url), { method: "POST" });
-                } catch (e) {
-                    console.error(e);
-                }
-            }
-            refresh();
-            timer = setInterval(refresh, 1000);
-        }
-
-        begin();
+        refresh();
+        timer = setInterval(refresh, 1000);
 </script>
 </body>
 </html>

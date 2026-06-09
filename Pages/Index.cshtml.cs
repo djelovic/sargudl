@@ -1,13 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Sargudl.Services;
 
 namespace Sargudl.Pages;
 
-public class IndexModel : PageModel
+public class IndexModel(DownloadManager manager) : PageModel
 {
+    private readonly DownloadManager _manager = manager;
+
     public void OnGet() { }
 
-    public IActionResult OnPost(string? url)
+    public async Task<IActionResult> OnPost(string? url, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(url) ||
             !Uri.TryCreate(url, UriKind.Absolute, out var parsed) ||
@@ -17,6 +20,9 @@ public class IndexModel : PageModel
             return Page();
         }
 
-        return RedirectToPagePreserveMethod("Download", routeValues: new { url });
+        // Start the download here, then Post/Redirect/Get to the status page so a
+        // browser refresh re-issues a harmless GET instead of re-submitting the form.
+        await _manager.StartAsync(url, ct);
+        return RedirectToPage("Download", new { url });
     }
 }
