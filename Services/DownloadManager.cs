@@ -32,7 +32,7 @@ public partial class DownloadManager(
 	private readonly DownloadOptions _options = options.Value;
 	private readonly ILogger<DownloadManager> _logger = logger;
 
-	private async void RemoteWhenDone(string url, Task task, CancellationToken ct) {
+	private async void RemoveWhenDone(string url, Task task, CancellationToken ct) {
 		await Task.Yield(); // ensure asynchronous execution
 
 		try {
@@ -42,7 +42,11 @@ public partial class DownloadManager(
 		}
 
 		try {
-			await Task.Delay(TimeSpan.FromDays(1), ct).ConfigureAwait(false);
+			// Keep a faulted job around for a while so its error stays observable
+			// via /api/status. A job that finished cleanly or was cancelled is
+			// removed at once (Completed is reconstructed from the file on disk,
+			// and a cancelled job has nothing worth keeping).
+			if (task.IsFaulted) await Task.Delay(TimeSpan.FromDays(1), ct).ConfigureAwait(false);
 			using var _ = await _lock.LockAsync(ct);
 			if (_jobs.TryGetValue(url, out var entry) && entry.Task == task) _jobs.Remove(url);
 		}
@@ -78,7 +82,7 @@ public partial class DownloadManager(
 		CancellationTokenSource cts = new();
 		var task = DownloadFileAsync(job, cts.Token);
 		_jobs.Add(url, (job, task, cts));
-		RemoteWhenDone(url, task, cts.Token);
+		RemoveWhenDone(url, task, cts.Token);
 		return job;
 	}
 
