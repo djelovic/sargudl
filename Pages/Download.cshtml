@@ -23,6 +23,7 @@
         .badge.Cancelled { background: #757575; }
         .badge.Failed { background: #b00020; }
         .badge.Queued { background: #fb8c00; }
+        .badge.Paused { background: #ff9800; }
         .error { color: #b00020; }
         button { padding: 0.5em 1em; cursor: pointer; }
         a { color: #1976d2; }
@@ -41,6 +42,8 @@
 
     <p id="error" class="error"></p>
 
+    <button id="pause" style="display:none;">Pause</button>
+    <button id="resume" style="display:none;">Resume</button>
     <button id="cancel" style="display:none;">Cancel</button>
     <button id="enableNotifications" style="display:none;">Enable notifications</button>
 
@@ -65,6 +68,8 @@
         const barEl = document.getElementById("bar");
         const errorEl = document.getElementById("error");
         const cancelEl = document.getElementById("cancel");
+        const pauseEl = document.getElementById("pause");
+        const resumeEl = document.getElementById("resume");
         const notifyEl = document.getElementById("enableNotifications");
 
         let timer = null;
@@ -134,8 +139,10 @@
 
                 errorEl.textContent = j.error || "";
 
-                const inProgress = j.status === "Downloading" || j.status === "Queued";
-                cancelEl.style.display = inProgress ? "inline-block" : "none";
+                const isTerminal = j.status === "Completed" || j.status === "Cancelled" || j.status === "Failed";
+                cancelEl.style.display = !isTerminal ? "inline-block" : "none";
+                pauseEl.style.display = j.status === "Downloading" ? "inline-block" : "none";
+                resumeEl.style.display = j.status === "Paused" ? "inline-block" : "none";
 
                 if ((j.status === "Completed" || j.status === "Failed") && lastStatus !== j.status) {
                     notifyTerminal(j);
@@ -143,7 +150,7 @@
                 lastStatus = j.status;
                 updateNotifyButton();
 
-                if (!inProgress && timer) {
+                if (isTerminal && timer) {
                     clearInterval(timer);
                     timer = null;
                 }
@@ -152,18 +159,35 @@
             }
         }
 
-        cancelEl.addEventListener("click", async () => {
-            cancelEl.disabled = true;
+        async function action(button, endpoint) {
+            button.disabled = true;
             try {
-                await fetch("/api/cancel?url=" + encodeURIComponent(url), { method: "POST" });
+                await fetch(endpoint + "?url=" + encodeURIComponent(url), { method: "POST" });
             } finally {
-                cancelEl.disabled = false;
+                button.disabled = false;
             }
             refresh();
-        });
+        }
 
-        refresh();
-        timer = setInterval(refresh, 1000);
-    </script>
+        cancelEl.addEventListener("click", () => action(cancelEl, "/api/cancel"));
+        pauseEl.addEventListener("click", () => action(pauseEl, "/api/pause"));
+        resumeEl.addEventListener("click", () => action(resumeEl, "/api/resume"));
+
+        const autoStart = @(Model.AutoStart ? "true" : "false");
+
+        async function begin() {
+            if (autoStart) {
+                try {
+                    await fetch("/api/start?url=" + encodeURIComponent(url), { method: "POST" });
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+            refresh();
+            timer = setInterval(refresh, 1000);
+        }
+
+        begin();
+</script>
 </body>
 </html>

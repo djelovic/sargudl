@@ -31,15 +31,21 @@ Then open `http://localhost:5000` (port configured in `Properties/launchSettings
 
 Razor Pages + a singleton `DownloadManager` holding jobs keyed by URL in a
 `ConcurrentDictionary`. Each job runs on a fire-and-forget `Task.Run` calling
-`DownloadWorker.RunAsync`.
+the manager's private `RunAsync`.
 
 - `Pages/Index.cshtml(.cs)` — URL form. `OnPost` validates and redirects to `/Download?url=...`.
 - `Pages/Download.cshtml(.cs)` — progress page. JS polls `/api/status?url=...`
   every second, posts to `/api/cancel?url=...` for the Cancel button.
-- `Services/DownloadManager.cs` — `StartOrGet(url)` returns the existing job if
-  it's `Queued` or `Downloading`, otherwise replaces it and starts a new one.
-- `Services/DownloadWorker.cs` — the actual download loop.
-- `Services/DownloadJob.cs` — mutable job state (status, bytes, error, CTS).
+- `Services/DownloadManager.cs` — owns the job dictionary, job construction
+  (URI parsing, filename derivation, destination resolution, dir creation),
+  and the download loop itself (HEAD skip check, retry/resume loop, cancel
+  cleanup). `StartOrGet(url)` returns the existing job if any (regardless
+  of status), otherwise creates and spawns. Terminal jobs are never
+  silently replaced — to re-download a URL whose job is `Completed`/
+  `Failed`/`Cancelled`, the file/job has to be removed first.
+- `Services/DownloadJob.cs` — mutable job state (status, bytes, error) plus
+  readonly `Url`/`FileName`/`DestinationPath` and an encapsulated
+  `CancellationTokenSource` exposed as `CT`/`Cancel()`/`Dispose()`.
 - `Services/DownloadOptions.cs` — bound to the `Downloads` config section.
 - `Program.cs` — DI registration and the two minimal-API endpoints
   (`/api/status`, `/api/cancel`).
@@ -69,18 +75,46 @@ Jobs live in memory only; restarting the server forgets all state.
   Anything else (5xx, network errors, IO errors) → log a warning, sleep
   `min(30s, 2^min(attempt,5)s)`, retry. Loop exits only on success, 4xx, or
   cancellation.
-- **Cancellation**: `job.Cts.Cancel()` propagates through `SendAsync`,
-  `ReadAsync`, and `Task.Delay`. The `.part` file is deleted in
-  `MarkCancelled`, so a subsequent Start for the same URL begins from zero.
+- **Cancellation vs pause**: both cancel the CTS so the download loop
+  unwinds at the next await. The `IsPauseRequested` flag on the job
+  distinguishes intent: `HandleStop` reads it and either marks `Paused`
+  (keeping the `.part` file) or marks `Cancelled` (deleting the `.part`).
+  `Cancel()` always clears the flag first so the cancellation takes
+  precedence if both are requested.
+- **Resume**: `DownloadManager.Resume(url)` calls `job.ResetForResume()`
+  which swaps in a fresh `CancellationTokenSource`, then re-enters
+  `RunAsync` via `Spawn`. The retry loop notices the existing `.part`
+  file and sends a `Range` request to continue from there.
+- All public manager methods take a single manager-wide `lock(_lock)`
+  around the dict access and any check-then-act on job state. The dict
+  is `Dictionary<string, (DownloadJob Job, Task? Task)>`: the `Task?`
+  slot holds the active worker task while one is running and is nulled
+  out in the worker's `finally` block when it exits. The `Job` entry
+  persists so terminal states stay observable through `/api/status`.
+- All public methods return a `Task` that completes when the requested
+  state change is observable. `StartOrGet` and `Resume` complete
+  synchronously (the dict is mutated under the lock). `Cancel` and
+  `Pause` return the active worker's task; awaiting it waits for the
+  worker to observe the cancel/pause and exit with the new status.
+  If several state-change requests race for the same URL, they all
+  return the same worker task and complete together when the worker
+  exits — possibly in a status that doesn't match the last request
+  (e.g. Pause followed quickly by Cancel results in `Cancelled`, and
+  both callers' awaits resolve at that point).
 - **Completion**: any existing destination file is deleted, then the `.part`
   is renamed to the final path.
 
 ## API surface
 
-- `GET /api/status?url=<url>` → JSON `{ url, fileName, destinationPath,
+- `POST /api/status?url=<url>` → JSON `{ url, fileName, destinationPath,
   bytesDownloaded, totalBytes, status, error }`. `status` is one of
-  `Queued | Downloading | Completed | Cancelled | Failed`.
-- `POST /api/cancel?url=<url>` → cancels the job for that URL. Idempotent.
+  `Queued | Downloading | Completed | Cancelled | Failed | Paused`.
+  This endpoint also starts the download if it isn't already known —
+  the first poll from `/Download?url=X` is what kicks off X. POST not
+  GET because the first call has a side effect.
+- `POST /api/cancel?url=<url>` → cancels the job (deletes `.part`). Idempotent.
+- `POST /api/pause?url=<url>` → pauses while `Downloading` (keeps `.part`).
+- `POST /api/resume?url=<url>` → resumes from `Paused` via `Range` request.
 
 Both endpoints are query-string–bound minimal APIs; no antiforgery applies
 to them. The Index form POST goes to the Razor Page handler, which uses
@@ -98,6 +132,6 @@ the framework's default antiforgery.
   which is good enough for a progress counter; don't add invariants that
   require two fields to be consistent without a lock.
 - `Url` is the job key. Two requests for the same URL share one job. The
-  `.part` file persists across transient retries (so the next attempt sends
-  a `Range` header), but is deleted on cancel — Cancel is a hard stop, not
-  a pause.
+  `.part` file persists across transient retries and across pause (the
+  `Range` request on resume picks up from there); it is deleted on cancel
+  — Cancel is a hard stop, Pause is a soft stop.

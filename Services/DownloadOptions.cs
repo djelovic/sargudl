@@ -1,14 +1,12 @@
 namespace Sargudl.Services;
 
-public class DownloadOptions
-{
-    public string MoviesPath { get; set; } = "";
-    public string TvShowsPath { get; set; } = "";
-    public Dictionary<string, BasicAuthCredentials> BasicAuth { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+public class DownloadOptions {
+	public required string MoviesPath { get; init; }
+	public required string TvShowsPath { get; init; }
+	public Dictionary<string, BasicAuthCredentials> BasicAuth { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
-public class BasicAuthCredentials
-{
-    public string Username { get; set; } = "";
-    public string Password { get; set; } = "";
+public class BasicAuthCredentials {
+	public required string Username { get; init; }
+	public required string Password { get; init; }
 }

@@ -1,18 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Sargudl.Services;
 
 namespace Sargudl.Pages;
 
 public class IndexModel : PageModel
 {
-    private readonly DownloadManager _manager;
-
-    public IndexModel(DownloadManager manager)
-    {
-        _manager = manager;
-    }
-
     public void OnGet() { }
 
     public IActionResult OnPost(string? url)
@@ -25,7 +17,6 @@ public class IndexModel : PageModel
             return Page();
         }
 
-        _manager.StartOrGet(url);
-        return RedirectToPage("Download", new { url });
+        return RedirectToPagePreserveMethod("Download", routeValues: new { url });
     }
 }
