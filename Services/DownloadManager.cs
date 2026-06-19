@@ -174,7 +174,8 @@ public partial class DownloadManager(
 
 		if (_jobs.TryGetValue(url, out var entry)) {
 			var j = entry.Job;
-			return new JobStatus(url, j.FileName, j.DestinationPath, j.BytesDownloaded, j.TotalBytes, DownloadStatus.Downloading, null);
+			var status = j.IsWaiting ? DownloadStatus.Retrying : DownloadStatus.Downloading;
+			return new JobStatus(url, j.FileName, j.DestinationPath, j.BytesDownloaded, j.TotalBytes, status, null);
 		}
 
 		string dest;
@@ -296,6 +297,7 @@ public partial class DownloadManager(
 		var attempt = 0;
 		while (true) {
 			ct.ThrowIfCancellationRequested();
+			job.IsWaiting = false;
 
 			attempt++;
 			try {
@@ -319,6 +321,7 @@ public partial class DownloadManager(
 					job.Url, attempt);
 
 				var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(attempt, 5))));
+				job.IsWaiting = true;
 				await Task.Delay(delay, ct);
 			}
 		}

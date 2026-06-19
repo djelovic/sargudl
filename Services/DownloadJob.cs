@@ -5,6 +5,7 @@ namespace Sargudl.Services;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DownloadStatus {
 	Downloading,
+	Retrying,
 	Completed,
 	Failed,
 	Paused
@@ -19,6 +20,10 @@ public class DownloadJob(string url, string destinationPath) {
 
 	public long BytesDownloaded;
 	public long? TotalBytes;
+
+	// True while the worker is sleeping between retry attempts. The download is
+	// still in progress, but BytesDownloaded won't advance until the next cycle.
+	public bool IsWaiting;
 }
 
 // Snapshot of a job's externally observable state, returned by the status API.

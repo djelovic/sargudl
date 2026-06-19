@@ -19,6 +19,7 @@
         .barInner { width: 0%; background: #4caf50; height: 100%; transition: width 0.3s ease; }
         .badge { display: inline-block; padding: 0.15em 0.6em; border-radius: 3px; color: #fff; background: #555; font-size: 0.9em; }
         .badge.Downloading { background: #1976d2; }
+        .badge.Retrying { background: #fb8c00; }
         .badge.Completed { background: #388e3c; }
         .badge.Cancelled { background: #757575; }
         .badge.Failed { background: #b00020; }
@@ -141,7 +142,7 @@
 
                 const isTerminal = j.status === "Completed" || j.status === "Cancelled" || j.status === "Failed";
                 cancelEl.style.display = !isTerminal ? "inline-block" : "none";
-                pauseEl.style.display = j.status === "Downloading" ? "inline-block" : "none";
+                pauseEl.style.display = (j.status === "Downloading" || j.status === "Retrying") ? "inline-block" : "none";
                 resumeEl.style.display = j.status === "Paused" ? "inline-block" : "none";
 
                 if ((j.status === "Completed" || j.status === "Failed") && lastStatus !== j.status) {
