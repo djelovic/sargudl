@@ -1,8 +1,10 @@
+using System.Text.Json.Serialization;
+
 namespace Sargudl.Services;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DownloadStatus {
 	Downloading,
-	Retrying,
 	Completed,
 	Failed,
 	Paused
@@ -17,6 +19,14 @@ public class DownloadJob(string url, string destinationPath) {
 
 	public long BytesDownloaded;
 	public long? TotalBytes;
-	public DownloadStatus Status = DownloadStatus.Downloading;
-	public string? Error;
 }
+
+// Snapshot of a job's externally observable state, returned by the status API.
+public record JobStatus(
+	string Url,
+	string FileName,
+	string DestinationPath,
+	long BytesDownloaded,
+	long? TotalBytes,
+	DownloadStatus Status,
+	string? Error);

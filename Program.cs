@@ -14,19 +14,7 @@ app.UseStaticFiles();
 app.MapRazorPages();
 
 app.MapGet("/api/status", async (string url, DownloadManager manager, CancellationToken ct) =>
-{
-    var job = await manager.GetAsync(url, ct);
-    return Results.Json(new
-    {
-        url = job.Url,
-        fileName = job.FileName,
-        destinationPath = job.DestinationPath,
-        bytesDownloaded = job.BytesDownloaded,
-        totalBytes = job.TotalBytes,
-        status = job.Status.ToString(),
-        error = job.Error
-    });
-});
+    Results.Json(await manager.GetAsync(url, ct)));
 
 app.MapPost("/api/cancel", async (string url, DownloadManager manager, CancellationToken ct) =>
 {
@@ -42,32 +30,14 @@ app.MapPost("/api/pause", async (string url, DownloadManager manager, Cancellati
 
 app.MapPost("/api/start", async (string url, DownloadManager manager, CancellationToken ct) =>
 {
-    var job = await manager.StartAsync(url, ct);
-    return Results.Json(new
-    {
-        url = job.Url,
-        fileName = job.FileName,
-        destinationPath = job.DestinationPath,
-        bytesDownloaded = job.BytesDownloaded,
-        totalBytes = job.TotalBytes,
-        status = job.Status.ToString(),
-        error = job.Error
-    });
+    await manager.StartAsync(url, ct);
+    return Results.Ok();
 });
 
 app.MapPost("/api/resume", async (string url, DownloadManager manager, CancellationToken ct) =>
 {
-    var job = await manager.ResumeAsync(url, ct);
-    return Results.Json(new
-    {
-        url = job.Url,
-        fileName = job.FileName,
-        destinationPath = job.DestinationPath,
-        bytesDownloaded = job.BytesDownloaded,
-        totalBytes = job.TotalBytes,
-        status = job.Status.ToString(),
-        error = job.Error
-    });});
-
+    await manager.ResumeAsync(url, ct);
+    return Results.Ok();
+});
 
 app.Run();
