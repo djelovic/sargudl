@@ -47,6 +47,7 @@ public partial class DownloadManager(
 			// removed at once (Completed is reconstructed from the file on disk,
 			// and a cancelled job has nothing worth keeping).
 			if (task.IsFaulted) await Task.Delay(TimeSpan.FromDays(1), ct).ConfigureAwait(false);
+
 			using var _ = await _lock.LockAsync(ct);
 			if (_jobs.TryGetValue(url, out var entry) && entry.Task == task) _jobs.Remove(url);
 		}
@@ -89,9 +90,25 @@ public partial class DownloadManager(
 	public async ValueTask<DownloadJob> GetAsync(string url, CancellationToken ct) {
 		using var _ = await _lock.LockAsync(ct);
 
-		if (_jobs.TryGetValue(url, out var existing)) return existing.Job;
+		if (_jobs.TryGetValue(url, out var existing)) {
+			if (existing.Task.IsFaulted) {
+				var ex1 = existing.Task.Exception;
+				var ex2 = ex1.InnerExceptions.Count == 1 ? ex1.InnerExceptions[0] : ex1;
+
+				return new DownloadJob(url, existing.Job.DestinationPath) {
+					BytesDownloaded = existing.Job.BytesDownloaded,
+					TotalBytes = existing.Job.TotalBytes,
+					Status = DownloadStatus.Failed,
+					Error = $"Download failed: {ex2.Message}"
+				};
+			}
+			else {
+				return existing.Job;
+			}
+		}
 		else {
 			var dest = ResolveDestinationPath(url);
+
 			if (File.Exists(dest + ".part") || !File.Exists(dest)) {
 				return new DownloadJob(url, dest) {
 					BytesDownloaded = TryGetFileSize(dest + ".part") ?? 0,
