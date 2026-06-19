@@ -30,13 +30,16 @@ public partial class DownloadManager(
 	private static partial Regex TvShowPattern();
 
 	private const int _maxAttempts = 5;
+	private static readonly TimeSpan _failureRetention = TimeSpan.FromDays(1);
 
 	// Currently running downloads, keyed by URL.
 	private readonly Dictionary<string, (DownloadJob Job, Task Task, CancellationTokenSource CancellationTokenSource)> _jobs = new();
 	// Failed downloads, keyed by URL. A job that is neither running nor failed
 	// (nor complete on disk) is considered paused — the failure exception is the
-	// only thing that distinguishes a failed job from a paused one.
-	private readonly Dictionary<string, Exception> _failures = new();
+	// only thing that distinguishes a failed job from a paused one. Each record
+	// carries a CancellationTokenSource used to cancel its delayed cleanup when
+	// the entry is superseded before it expires.
+	private readonly Dictionary<string, (Exception Exception, CancellationTokenSource Cleanup)> _failures = new();
 	private readonly SemaphoreSlim _lock = new(1, 1);
 	private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
 	private readonly DownloadOptions _options = options.Value;
@@ -64,9 +67,49 @@ public partial class DownloadManager(
 			using var _ = await _lock.LockAsync();
 			if (!_jobs.TryGetValue(url, out var entry) || entry.Task != task) return;
 			_jobs.Remove(url);
-			if (failure != null) _failures[url] = failure;
+			if (failure != null) RecordFailure(url, failure);
 		}
 		catch {
+		}
+	}
+
+	// Records a failure for the URL and schedules its delayed cleanup, cancelling
+	// any failure previously recorded for the URL. Must be called under _lock.
+	private void RecordFailure(string url, Exception failure) {
+		ClearFailure(url);
+		var cleanup = new CancellationTokenSource();
+		_failures[url] = (failure, cleanup);
+		// Fire-and-forget: keep the failure observable for a while, then drop it
+		// unless another action changes (and cancels) this record first.
+		_ = ExpireFailureAsync(url, cleanup);
+	}
+
+	// Removes a failure record (if any) and cancels its pending cleanup wait.
+	// Must be called under _lock.
+	private void ClearFailure(string url) {
+		if (_failures.Remove(url, out var entry))
+			entry.Cleanup.Cancel();
+	}
+
+	// Waits out the retention period, then drops the failure record unless it has
+	// been superseded (its cleanup token cancelled) in the meantime.
+	private async Task ExpireFailureAsync(string url, CancellationTokenSource cleanup) {
+		try {
+			try {
+				await Task.Delay(_failureRetention, cleanup.Token).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException) {
+				return; // superseded by another action
+			}
+
+			using var _ = await _lock.LockAsync();
+			if (_failures.TryGetValue(url, out var entry) && entry.Cleanup == cleanup)
+				_failures.Remove(url);
+		}
+		catch {
+		}
+		finally {
+			cleanup.Dispose();
 		}
 	}
 
@@ -76,7 +119,7 @@ public partial class DownloadManager(
 		if (_jobs.ContainsKey(url)) return;
 
 		// (Re)starting clears any prior failure for this URL.
-		_failures.Remove(url);
+		ClearFailure(url);
 
 		DownloadJob job;
 		try {
@@ -84,7 +127,7 @@ public partial class DownloadManager(
 		}
 		catch (Exception ex) {
 			_logger.LogError(ex, "Failed to create download job for {Url}", url);
-			_failures[url] = ex;
+			RecordFailure(url, ex);
 			return;
 		}
 
@@ -110,7 +153,7 @@ public partial class DownloadManager(
 	private async Task StopAsync(string url, bool pause, CancellationToken ct) {
 		using var _ = await _lock.LockAsync(ct);
 
-		_failures.Remove(url);
+		ClearFailure(url);
 
 		if (_jobs.TryGetValue(url, out var entry)) {
 			entry.CancellationTokenSource.Cancel();
@@ -140,7 +183,7 @@ public partial class DownloadManager(
 		}
 		catch (Exception ex) {
 			// Can't even resolve the URL — surface it as a failure.
-			var msg = _failures.TryGetValue(url, out var fex) ? fex.Message : ex.Message;
+			var msg = _failures.TryGetValue(url, out var fex) ? fex.Exception.Message : ex.Message;
 			return new JobStatus(url, "-", "-", 0, null, DownloadStatus.Failed, msg);
 		}
 
@@ -158,7 +201,7 @@ public partial class DownloadManager(
 
 		// Failed and paused are identical except for the recorded exception.
 		return _failures.TryGetValue(url, out var ex2)
-			? new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Failed, ex2.Message)
+			? new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Failed, ex2.Exception.Message)
 			: new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Paused, null);
 	}
 
