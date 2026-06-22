@@ -4,6 +4,7 @@ namespace Sargudl.Services;
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DownloadStatus {
+	NotStarted,
 	Downloading,
 	Retrying,
 	Completed,
@@ -34,4 +35,4 @@ public record JobStatus(
 	long BytesDownloaded,
 	long? TotalBytes,
 	DownloadStatus Status,
-	string? Error);
+	string? Error = null);

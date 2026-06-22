@@ -31,6 +31,7 @@ public partial class DownloadManager(
 
 	private const int _maxAttempts = 5;
 	private static readonly TimeSpan _failureRetention = TimeSpan.FromDays(1);
+	private static readonly TimeSpan _statusPollInterval = TimeSpan.FromSeconds(1);
 
 	// Currently running downloads, keyed by URL.
 	private readonly Dictionary<string, (DownloadJob Job, Task Task, CancellationTokenSource CancellationTokenSource)> _jobs = new();
@@ -113,10 +114,15 @@ public partial class DownloadManager(
 		}
 	}
 
-	private async ValueTask StartOrResume(string url, CancellationToken ct) {
+	private async ValueTask<JobStatus> StartOrResume(string url, CancellationToken ct) {
 		using var _ = await _lock.LockAsync(ct);
 
-		if (_jobs.ContainsKey(url)) return;
+		// Already running: report its live state.
+		if (_jobs.TryGetValue(url, out var existing)) {
+			var j = existing.Job;
+			var running = j.IsWaiting ? DownloadStatus.Retrying : DownloadStatus.Downloading;
+			return new JobStatus(url, j.FileName, j.DestinationPath, j.BytesDownloaded, j.TotalBytes, running, null);
+		}
 
 		// (Re)starting clears any prior failure for this URL.
 		ClearFailure(url);
@@ -128,34 +134,45 @@ public partial class DownloadManager(
 		catch (Exception ex) {
 			_logger.LogError(ex, "Failed to create download job for {Url}", url);
 			RecordFailure(url, ex);
-			return;
+			return new JobStatus(url, "-", "-", 0, null, DownloadStatus.Failed, ex.Message);
 		}
 
-		// Already fully downloaded on disk (no partial): nothing to do.
-		if (File.Exists(job.DestinationPath) && !File.Exists(job.PartPath)) return;
+		// Already fully downloaded on disk (no partial): report completed.
+		if (File.Exists(job.DestinationPath) && !File.Exists(job.PartPath)) {
+			var size = TryGetFileSize(job.DestinationPath) ?? 0;
+			return new JobStatus(url, job.FileName, job.DestinationPath, size, size, DownloadStatus.Completed, null);
+		}
 
 		CancellationTokenSource cts = new();
 		var task = DownloadFileAsync(job, cts.Token);
 		_jobs.Add(url, (job, task, cts));
 		TrackCompletion(url, task);
+
+		// Just spawned: bytes come from any resumed partial; total isn't known
+		// until the worker reads the response headers (the stream will fill it in).
+		var startBytes = TryGetFileSize(job.PartPath) ?? 0;
+		return new JobStatus(url, job.FileName, job.DestinationPath, startBytes, null, DownloadStatus.Downloading, null);
 	}
 
-	public ValueTask StartAsync(string url, CancellationToken ct) => StartOrResume(url, ct);
+	public ValueTask<JobStatus> StartAsync(string url, CancellationToken ct) => StartOrResume(url, ct);
 
-	public ValueTask ResumeAsync(string url, CancellationToken ct) => StartOrResume(url, ct);
+	public ValueTask<JobStatus> ResumeAsync(string url, CancellationToken ct) => StartOrResume(url, ct);
 
-	public Task PauseAsync(string url, CancellationToken ct) => StopAsync(url, pause: true, ct);
+	public Task<JobStatus> PauseAsync(string url, CancellationToken ct) => StopAsync(url, pause: true, ct);
 
-	public Task CancelAsync(string url, CancellationToken ct) => StopAsync(url, pause: false, ct);
+	public Task<JobStatus> CancelAsync(string url, CancellationToken ct) => StopAsync(url, pause: false, ct);
 
 	// Stops a download. Pause keeps the .part file; cancel deletes it. Both are
 	// idempotent and also clear any failed state for the URL.
-	private async Task StopAsync(string url, bool pause, CancellationToken ct) {
+	private async Task<JobStatus> StopAsync(string url, bool pause, CancellationToken ct) {
 		using var _ = await _lock.LockAsync(ct);
 
 		ClearFailure(url);
 
+		string dest, fileName;
 		if (_jobs.TryGetValue(url, out var entry)) {
+			dest = entry.Job.DestinationPath;
+			fileName = entry.Job.FileName;
 			entry.CancellationTokenSource.Cancel();
 			try {
 				await entry.Task;
@@ -164,9 +181,28 @@ public partial class DownloadManager(
 			}
 			_jobs.Remove(url);
 		}
+		else {
+			// No running job; resolve the path to report on the on-disk state.
+			try {
+				dest = ResolveDestinationPath(url);
+			}
+			catch (Exception ex) {
+				return new JobStatus(url, "-", "-", 0, null, DownloadStatus.Failed, ex.Message);
+			}
+			fileName = Path.GetFileName(dest);
+		}
 
 		// Cancel is a hard stop: drop the partial. Pause keeps it for resume.
-		if (!pause) DeletePartForUrl(url);
+		var partPath = dest + ".part";
+		if (!pause) DeletePart(partPath);
+
+		// With a partial on disk it's paused; without one it was never started
+		// (or was cancelled, which deletes the partial). Total is left to the
+		// status stream to probe — no HEAD on the stop path.
+		var partExists = File.Exists(partPath);
+		var bytes = partExists ? TryGetFileSize(partPath) ?? 0 : 0;
+		var status = partExists ? DownloadStatus.Paused : DownloadStatus.NotStarted;
+		return new JobStatus(url, fileName, dest, bytes, null, status, null);
 	}
 
 	public async ValueTask<JobStatus> GetAsync(string url, CancellationToken ct) {
@@ -197,13 +233,95 @@ public partial class DownloadManager(
 			return new JobStatus(url, fileName, dest, size, size, DownloadStatus.Completed, null);
 		}
 
-		var bytes = TryGetFileSize(partPath) ?? 0;
+		var partExists = File.Exists(partPath);
+		var bytes = partExists ? TryGetFileSize(partPath) ?? 0 : 0;
 		var total = await GetRemoteFileSizeAsync(new Uri(url), ct);
 
-		// Failed and paused are identical except for the recorded exception.
-		return _failures.TryGetValue(url, out var ex2)
-			? new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Failed, ex2.Exception.Message)
-			: new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Paused, null);
+		if (_failures.TryGetValue(url, out var ex2))
+			return new JobStatus(url, fileName, dest, bytes, total, DownloadStatus.Failed, ex2.Exception.Message);
+
+		// With a partial on disk it's paused; without one it was never started
+		// (or was cancelled, which deletes the partial).
+		var stopped = partExists ? DownloadStatus.Paused : DownloadStatus.NotStarted;
+		return new JobStatus(url, fileName, dest, bytes, total, stopped, null);
+	}
+
+	// Streams status snapshots for a URL, yielding only when the status changes
+	// and completing once the download reaches a terminal state. Polls on a fixed
+	// interval; honours the caller's token (cancelled when the client disconnects).
+	// Self-contained: reads the live job from _jobs, otherwise derives state from
+	// disk, probing the remote size at most once and caching it in a local.
+	public async IAsyncEnumerable<JobStatus> WatchAsync(string url, [EnumeratorCancellation] CancellationToken ct = default) {
+		// The destination never changes for a given URL; resolve it once. An
+		// unresolvable URL can only ever be a failure, so report and stop.
+		string? dest = null;
+		string? resolveError = null;
+		try {
+			dest = ResolveDestinationPath(url);
+		}
+		catch (Exception ex) {
+			resolveError = ex.Message;
+		}
+
+		if (dest == null) {
+			string msg;
+			using (await _lock.LockAsync(ct))
+				msg = _failures.TryGetValue(url, out var fex) ? fex.Exception.Message : resolveError!;
+			yield return new JobStatus(url, "-", "-", 0, null, DownloadStatus.Failed, msg);
+			yield break;
+		}
+
+		var fileName = Path.GetFileName(dest);
+		var partPath = dest + ".part";
+
+		long? remoteTotal = null;
+		bool remoteProbed = false;
+		JobStatus? last = null;
+
+		while (!ct.IsCancellationRequested) {
+			// Snapshot the in-memory state under the lock; build/yield outside it.
+			DownloadJob? running = null;
+			string? failureMessage = null;
+			using (await _lock.LockAsync(ct)) {
+				if (_jobs.TryGetValue(url, out var entry)) running = entry.Job;
+				else if (_failures.TryGetValue(url, out var fex)) failureMessage = fex.Exception.Message;
+			}
+
+			JobStatus status;
+			if (running != null) {
+				// Capture the live total so we never need a probe once it ends.
+				if (running.TotalBytes is long t) { remoteTotal = t; remoteProbed = true; }
+				var s = running.IsWaiting ? DownloadStatus.Retrying : DownloadStatus.Downloading;
+				status = new JobStatus(url, running.FileName, running.DestinationPath, running.BytesDownloaded, running.TotalBytes, s);
+			}
+			else if (!File.Exists(partPath) && File.Exists(dest)) {
+				var size = TryGetFileSize(dest) ?? 0;
+				yield return new JobStatus(url, fileName, dest, size, size, DownloadStatus.Completed);
+				break;
+			}
+			else {
+				// Not running and not complete: paused if a partial exists,
+				// otherwise never started (a cancel deletes the partial). A
+				// recorded failure overrides either. Probe the remote size at
+				// most once for the lifetime of this stream.
+				var partExists = File.Exists(partPath);
+				var bytes = partExists ? TryGetFileSize(partPath) ?? 0 : 0;
+				if (!remoteProbed) {
+					remoteTotal = await GetRemoteFileSizeAsync(new Uri(url), ct);
+					remoteProbed = true;
+				}
+				var stopped = partExists ? DownloadStatus.Paused : DownloadStatus.NotStarted;
+				status = new JobStatus(url, fileName, dest, bytes, remoteTotal, failureMessage != null ? DownloadStatus.Failed : stopped, failureMessage);
+			}
+
+			if (last != status) {
+				yield return status;
+				last = status;
+			}
+
+			if (status.Status is DownloadStatus.Completed or DownloadStatus.Failed) break;
+			await Task.Delay(_statusPollInterval, ct);
+		}
 	}
 
 	private DownloadJob CreateJob(string url) {
@@ -362,7 +480,7 @@ public partial class DownloadManager(
 		request.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
 	}
 
-	// Deletes the .part for a URL, resolving its path defensively.
+	// Deletes the given .part file if present.
 	private void DeletePart(string partPath) {
 		try {
 			if (File.Exists(partPath))
@@ -370,17 +488,6 @@ public partial class DownloadManager(
 		}
 		catch (Exception ex) {
 			_logger.LogWarning(ex, "Failed to delete partial file {PartPath}", partPath);
-		}
-	}
-
-	// Deletes the .part for a URL that has no running job (e.g. cancelling a
-	// paused or failed download). Best-effort: an unresolvable URL has no file.
-	private void DeletePartForUrl(string url) {
-		try {
-			DeletePart(ResolveDestinationPath(url) + ".part");
-		}
-		catch (Exception ex) {
-			_logger.LogDebug(ex, "Could not resolve part path for {Url} during cancel", url);
 		}
 	}
 

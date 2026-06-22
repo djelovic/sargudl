@@ -21,9 +21,8 @@
         .badge.Downloading { background: #1976d2; }
         .badge.Retrying { background: #fb8c00; }
         .badge.Completed { background: #388e3c; }
-        .badge.Cancelled { background: #757575; }
+        .badge.NotStarted { background: #757575; }
         .badge.Failed { background: #b00020; }
-        .badge.Queued { background: #fb8c00; }
         .badge.Paused { background: #ff9800; }
         .error { color: #b00020; }
         button { padding: 0.5em 1em; cursor: pointer; }
@@ -73,7 +72,7 @@
         const resumeEl = document.getElementById("resume");
         const notifyEl = document.getElementById("enableNotifications");
 
-        let timer = null;
+        let es = null;
         let lastStatus = null;
         let notified = false;
 
@@ -120,62 +119,65 @@
 
         updateNotifyButton();
 
-        async function refresh() {
-            try {
-                const r = await fetch("/api/status?url=" + encodeURIComponent(url));
-                if (!r.ok) return;
-                const j = await r.json();
+        function render(j) {
+            fileEl.textContent = j.fileName || "—";
+            destEl.textContent = j.destinationPath || "—";
 
-                fileEl.textContent = j.fileName || "—";
-                destEl.textContent = j.destinationPath || "—";
+            statusEl.textContent = j.status === "NotStarted" ? "Not started" : j.status;
+            statusEl.className = "badge " + j.status;
 
-                statusEl.textContent = j.status;
-                statusEl.className = "badge " + j.status;
+            const downloaded = formatBytes(j.bytesDownloaded);
+            const total = formatBytes(j.totalBytes);
+            const pct = j.totalBytes ? (j.bytesDownloaded / j.totalBytes * 100) : 0;
+            progressEl.textContent = `${downloaded} / ${total} (${pct.toFixed(2)}%)`;
+            barEl.style.width = Math.min(100, pct) + "%";
 
-                const downloaded = formatBytes(j.bytesDownloaded);
-                const total = formatBytes(j.totalBytes);
-                const pct = j.totalBytes ? (j.bytesDownloaded / j.totalBytes * 100) : 0;
-                progressEl.textContent = `${downloaded} / ${total} (${pct.toFixed(2)}%)`;
-                barEl.style.width = Math.min(100, pct) + "%";
+            errorEl.textContent = j.error || "";
 
-                errorEl.textContent = j.error || "";
+            const isTerminal = j.status === "Completed" || j.status === "Failed";
+            cancelEl.style.display = (!isTerminal && j.status !== "NotStarted") ? "inline-block" : "none";
+            pauseEl.style.display = (j.status === "Downloading" || j.status === "Retrying") ? "inline-block" : "none";
+            resumeEl.style.display = (j.status === "Paused" || j.status === "NotStarted") ? "inline-block" : "none";
 
-                const isTerminal = j.status === "Completed" || j.status === "Cancelled" || j.status === "Failed";
-                cancelEl.style.display = !isTerminal ? "inline-block" : "none";
-                pauseEl.style.display = (j.status === "Downloading" || j.status === "Retrying") ? "inline-block" : "none";
-                resumeEl.style.display = j.status === "Paused" ? "inline-block" : "none";
-
-                if ((j.status === "Completed" || j.status === "Failed") && lastStatus !== j.status) {
-                    notifyTerminal(j);
-                }
-                lastStatus = j.status;
-                updateNotifyButton();
-
-                if (isTerminal && timer) {
-                    clearInterval(timer);
-                    timer = null;
-                }
-            } catch (e) {
-                console.error(e);
+            if ((j.status === "Completed" || j.status === "Failed") && lastStatus !== j.status) {
+                notifyTerminal(j);
             }
+            lastStatus = j.status;
+            updateNotifyButton();
+
+            // Terminal: stop the stream so EventSource doesn't reconnect.
+            if (isTerminal && es) {
+                es.close();
+                es = null;
+            }
+        }
+
+        function connect() {
+            es = new EventSource("/api/events?url=" + encodeURIComponent(url));
+            es.onmessage = (e) => render(JSON.parse(e.data));
+            // On a dropped connection EventSource reconnects on its own; we only
+            // close it ourselves once the download reaches a terminal state.
         }
 
         async function action(button, endpoint) {
             button.disabled = true;
             try {
-                await fetch(endpoint + "?url=" + encodeURIComponent(url), { method: "POST" });
+                // The action endpoint returns the resulting status; render it
+                // directly for immediate feedback. The open stream keeps pushing after.
+                const r = await fetch(endpoint + "?url=" + encodeURIComponent(url), { method: "POST" });
+                if (r.ok) render(await r.json());
+            } catch (e) {
+                console.error(e);
             } finally {
                 button.disabled = false;
             }
-            refresh();
         }
 
         cancelEl.addEventListener("click", () => action(cancelEl, "/api/cancel"));
         pauseEl.addEventListener("click", () => action(pauseEl, "/api/pause"));
         resumeEl.addEventListener("click", () => action(resumeEl, "/api/resume"));
 
-        refresh();
-        timer = setInterval(refresh, 1000);
+        connect();
 </script>
 </body>
 </html>
