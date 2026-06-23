@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Sargudl.Services;
+using MiniDl.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 

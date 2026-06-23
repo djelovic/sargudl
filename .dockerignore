@@ -1,0 +1,10 @@
+bin/
+obj/
+downloads/
+.git/
+.vs/
+.vscode/
+**/launchSettings.json
+Dockerfile
+.dockerignore
+*.md

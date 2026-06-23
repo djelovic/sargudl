@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
-namespace Sargudl.Pages;
+namespace MiniDl.Pages;
 
 public class DownloadModel : PageModel
 {

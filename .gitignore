@@ -1,5 +1,5 @@
 .DS_Store
-Sargudl.csproj.lscache
+*.csproj.lscache
 .claude/
 .vscode/
 bin/

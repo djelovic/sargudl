@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace Sargudl.Services;
+namespace MiniDl.Services;
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DownloadStatus {

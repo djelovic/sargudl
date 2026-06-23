@@ -1,4 +1,4 @@
-namespace Sargudl.Services;
+namespace MiniDl.Services;
 
 public class DownloadOptions {
 	public required string MoviesPath { get; init; }

@@ -1,4 +1,4 @@
-# Sargudl
+# MiniDl
 
 A mini ASP.NET Core download manager. The user enters a URL, the server downloads
 the file in the background, and a progress page polls the server for status.

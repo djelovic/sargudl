@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Sargudl.Services;
+using MiniDl.Services;
 
-namespace Sargudl.Pages;
+namespace MiniDl.Pages;
 
 public class IndexModel(DownloadManager manager) : PageModel
 {

@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
-namespace Sargudl.Services;
+namespace MiniDl.Services;
 
 // Thrown for download failures that should not be retried (e.g. 4xx responses).
 public sealed class PermanentDownloadException(string message) : Exception(message);
