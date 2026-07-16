@@ -9,10 +9,10 @@
 <head>
     <meta charset="utf-8" />
     <title>@ViewData["Title"]</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <style>
         body { font-family: sans-serif; max-width: 720px; margin: 3em auto; padding: 0 1em; color: #222; }
         h1 { margin-bottom: 0.2em; }
-        label { display: block; margin-top: 1em; font-weight: bold; }
         input[type=url] { width: 100%; padding: 0.6em; box-sizing: border-box; font-size: 1em; }
         button { padding: 0.6em 1.2em; margin-top: 1em; font-size: 1em; cursor: pointer; }
         .error { color: #b00020; margin-top: 1em; }
@@ -22,7 +22,6 @@
     <h1>Mini Download Manager</h1>
     <p>Paste a URL to start a download.</p>
     <form method="post">
-        <label for="url">Download URL</label>
         <input id="url" name="url" type="url" required placeholder="https://example.com/file.mkv" />
         <button type="submit">Start Download</button>
     </form>
