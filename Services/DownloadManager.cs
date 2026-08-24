@@ -44,6 +44,7 @@ public partial class DownloadManager(
 	private readonly SemaphoreSlim _lock = new(1, 1);
 	private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
 	private readonly DownloadOptions _options = options.Value;
+	private readonly HashSet<string> _videoExtensions = options.Value.ResolveVideoExtensions();
 	private readonly ILogger<DownloadManager> _logger = logger;
 
 	// Observes a worker task and updates the dictionaries when it ends:
@@ -355,9 +356,10 @@ public partial class DownloadManager(
 		if (match.Success) {
 			var showName = match.Groups["name"].Value.Replace('.', ' ').Trim();
 			var season = int.Parse(match.Groups["season"].Value);
-			return Path.Combine(_options.TvShowsPath, showName, $"Season {season}", fileName);
+			return Path.Combine(_options.Paths.Shows, showName, $"Season {season}", fileName);
 		}
-		return Path.Combine(_options.MoviesPath, fileName);
+		else if (_videoExtensions.Contains(Path.GetExtension(fileName))) return Path.Combine(_options.Paths.Movies, fileName);
+		else return Path.Combine(_options.Paths.Other, fileName);
 	}
 
 	private async IAsyncEnumerable<(long BytesDownloaded, long? TotalBytes)> DownloadFileAsync(Uri url, string destinationPath, [EnumeratorCancellation] CancellationToken ct = default) {

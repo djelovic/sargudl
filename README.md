@@ -6,8 +6,9 @@ state) over Server-Sent Events. Downloads can be paused, resumed, and cancelled,
 and partially downloaded files resume from where they left off via HTTP range
 requests.
 
-Files are routed automatically: anything containing `'.sXXeXX.'` in the file name lands under the TV-shows root (organised by show and season), everything
-else under the movies root.
+Files are routed automatically: anything containing `'.sXXeXX.'` in the file name
+lands under the TV-shows root (organised by show and season), other video files
+under the movies root, and everything else under the "other" root.
 
 ## Configuration
 
@@ -16,8 +17,12 @@ Settings live in `appsettings.json` under the `Downloads` section:
 ```json
 {
   "Downloads": {
-    "MoviesPath": "./downloads/Movies",
-    "TvShowsPath": "./downloads/TvShows",
+    "Paths": {
+      "Movies": "./downloads/Movies",
+      "Shows": "./downloads/TvShows",
+      "Other": "./downloads/Other"
+    },
+    "VideoExtensions": [ ".mkv", ".mp4", ".avi" ],
     "BasicAuth": {
       "example.com": {
         "Username": "example",
@@ -28,9 +33,16 @@ Settings live in `appsettings.json` under the `Downloads` section:
 }
 ```
 
-- **`MoviesPath`** / **`TvShowsPath`** — destination roots for downloaded files.
-  In the Docker image these default to `/app/downloads/Movies` and
-  `/app/downloads/TvShows`; mount a volume there to keep files on the host.
+- **`Paths.Movies`** / **`Paths.Shows`** / **`Paths.Other`** — destination roots for downloaded files.
+  In the Docker image these default to `/app/downloads/Movies`,
+  `/app/downloads/TvShows` and `/app/downloads/Other`; mount a volume at
+  `/app/downloads` to keep files on the host.
+- **`VideoExtensions`** — optional list of the extensions that count as video
+  and therefore land under the movies root. Leave it out (or empty) to use the
+  built-in list: `.mkv`, `.mp4`, `.m4v`, `.avi`, `.mov`, `.wmv`, `.flv`,
+  `.webm`, `.mpg`, `.mpeg`, `.m2ts`, `.ts`, `.vob`, `.ogv`, `.divx`, `.3gp`,
+  `.rm`, `.rmvb`, `.asf`. Entries may be written with or without the leading
+  dot and are matched case-insensitively.
 - **`BasicAuth`** — optional HTTP Basic credentials, keyed by host. The key is
   matched as a suffix, so an entry for `example.com` is used for requests to
   `example.com` and any subdomain such as `files.example.com`. Omit the section
@@ -59,7 +71,7 @@ docker run -d \
 Then open <http://localhost:8080>.
 
 > The bind-mounted `appsettings.json` lets you configure the app without
-> rebuilding the image. Keep its `MoviesPath`/`TvShowsPath` pointing under
+> rebuilding the image. Keep its `Paths.Movies`/`Paths.Shows`/`Paths.Other` pointing under
 > `/app/downloads` (the mounted volume) so files persist on the host.
 
 ### With Docker Compose

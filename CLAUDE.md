@@ -15,15 +15,22 @@ Then open `http://localhost:5000` (port configured in `Properties/launchSettings
 
 ```json
 "Downloads": {
-  "MoviesPath": "./downloads/Movies",
-  "TvShowsPath": "./downloads/TvShows",
+  "Paths": {
+    "Movies": "./downloads/Movies",
+    "Shows": "./downloads/TvShows",
+    "Other": "./downloads/Other"
+  },
+  "VideoExtensions": [ ".mkv", ".mp4" ],
   "BasicAuth": {
     "example.com": { "Username": "...", "Password": "..." }
   }
 }
 ```
 
-- `MoviesPath` / `TvShowsPath`: destination roots.
+- `Paths.Movies` / `Paths.Shows` / `Paths.Other`: destination roots.
+- `VideoExtensions`: optional list deciding what counts as a video. Omitted or
+  empty → `DownloadOptions.DefaultVideoExtensions`. Entries may be written with
+  or without the leading dot; matching is case-insensitive.
 - `BasicAuth`: keyed by host. A request to `foo.example.com` matches the
   `example.com` entry (suffix match), as does an exact match to `example.com`.
 
@@ -47,6 +54,8 @@ the manager's private `RunAsync`.
   readonly `Url`/`FileName`/`DestinationPath` and an encapsulated
   `CancellationTokenSource` exposed as `CT`/`Cancel()`/`Dispose()`.
 - `Services/DownloadOptions.cs` — bound to the `Downloads` config section.
+  `ResolveVideoExtensions()` builds the case-insensitive extension set the
+  manager caches at construction.
 - `Program.cs` — DI registration and the two minimal-API endpoints
   (`/api/status`, `/api/cancel`).
 
@@ -57,8 +66,9 @@ Jobs live in memory only; restarting the server forgets all state.
 - **Filename** comes from the URL path (`Uri.AbsolutePath` → `Path.GetFileName`).
 - **Routing**: filename matched against `^(?<name>.+?)\.s(?<season>\d{2})e\d{2}`
   (case-insensitive).
-  - Match → `<TvShowsPath>/<name with '.'→' '>/Season <n>/<filename>`
-  - No match → `<MoviesPath>/<filename>`
+  - Match → `<Paths.Shows>/<name with '.'→' '>/Season <n>/<filename>`
+  - No match, video extension → `<Paths.Movies>/<filename>`
+  - No match, anything else (including no extension) → `<Paths.Other>/<filename>`
 - **Skip-if-already-downloaded**: before the retry loop, if the destination
   file exists and no `.part` is present, a HEAD request is issued. If the
   server returns success with a `Content-Length` matching the local file,
